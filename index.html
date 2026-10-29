@@ -1,0 +1,201 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>오늘의 급식 평가</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 24px;
+      min-height: 100vh;
+      display: grid; place-items: center;
+      background: #f4f6fb;
+      font-family: system-ui, sans-serif;
+      color: #202438;
+    }
+    main {
+      width: 100%; max-width: 400px;
+      padding: 30px 22px;
+      background: white; border-radius: 22px;
+      text-align: center;
+      box-shadow: 0 8px 30px #18264a12;
+    }
+    h1 { font-size: 25px; }
+    .sub { color: #73798b; font-size: 14px; }
+    .stars { display: flex; justify-content: center; gap: 7px; }
+    .star {
+      border: 0; background: none; cursor: pointer;
+      font-size: 42px; color: #d8dbe3;
+      padding: 0;
+    }
+    .star.active { color: #f5b82e; }
+    button:focus-visible { outline: 3px solid #5279db; }
+    .submit {
+      width: 100%; padding: 14px; margin-top: 22px;
+      background: #4169e1; color: white;
+      border: 0; border-radius: 12px;
+      font-size: 16px; font-weight: 700; cursor: pointer;
+    }
+    .submit:disabled { opacity: .5; cursor: wait; }
+    .stats {
+      margin-top: 28px; padding: 18px;
+      background: #f4f6fb; border-radius: 14px;
+    }
+    .average { font-size: 36px; font-weight: 800; }
+    #status { min-height: 22px; font-size: 13px; color: #52617c; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>🍱 오늘의 급식 평가</h1>
+  <p class="sub">이름 없이 별점만 남겨 주세요.</p>
+
+  <div class="stars" id="stars" aria-label="별점 선택">
+    <button class="star" data-value="1" aria-label="1점">★</button>
+    <button class="star" data-value="2" aria-label="2점">★</button>
+    <button class="star" data-value="3" aria-label="3점">★</button>
+    <button class="star" data-value="4" aria-label="4점">★</button>
+    <button class="star" data-value="5" aria-label="5점">★</button>
+  </div>
+
+  <button class="submit" id="submit">별점 제출</button>
+  <p id="status" role="status">연결 중...</p>
+
+  <section class="stats" aria-live="polite">
+    <div class="sub">오늘의 평균 별점</div>
+    <div class="average" id="average">- / 5</div>
+    <div class="sub" id="count">평가 0개</div>
+  </section>
+</main>
+
+<script>
+  // Supabase 프로젝트 설정값으로 교체하세요.
+  const SUPABASE_URL = "YOUR_SUPABASE_URL";
+  const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+
+  const db = window.supabase.createClient(
+    SUPABASE_URL, SUPABASE_ANON_KEY
+  );
+
+  let selected = 0;
+  let busy = false;
+
+  // 한국 시간 기준 정오부터 다음 정오까지를 하루로 계산
+  function dayKey() {
+    const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    if (kst.getUTCHours() < 12) {
+      kst.setUTCDate(kst.getUTCDate() - 1);
+    }
+    return [
+      kst.getUTCFullYear(),
+      String(kst.getUTCMonth() + 1).padStart(2, "0"),
+      String(kst.getUTCDate()).padStart(2, "0")
+    ].join("-");
+  }
+
+  function alreadyRated() {
+    return localStorage.getItem("ratedDay") === dayKey();
+  }
+
+  function renderStars() {
+    document.querySelectorAll(".star").forEach(button => {
+      const active = Number(button.dataset.value) <= selected;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed",
+        String(Number(button.dataset.value) === selected));
+    });
+  }
+
+  document.querySelectorAll(".star").forEach(button => {
+    button.addEventListener("click", () => {
+      selected = Number(button.dataset.value);
+      renderStars();
+    });
+  });
+
+  async function refresh() {
+    const { data, error } = await db.rpc("get_rating_stats");
+
+    if (error) {
+      document.getElementById("status").textContent =
+        "평가 정보를 불러오지 못했습니다.";
+      return;
+    }
+
+    const stats = data[0];
+    document.getElementById("average").textContent =
+      Number(stats.avg_rating).toFixed(2) + " / 5";
+    document.getElementById("count").textContent =
+      "평가 " + stats.total + "개";
+  }
+
+  document.getElementById("submit").addEventListener("click",
+    async () => {
+      if (busy) return;
+
+      if (alreadyRated()) {
+        document.getElementById("status").textContent =
+          "오늘은 이미 평가했습니다.";
+        return;
+      }
+
+      if (!selected) {
+        document.getElementById("status").textContent =
+          "별점을 먼저 선택해 주세요.";
+        return;
+      }
+
+      busy = true;
+      document.getElementById("submit").disabled = true;
+      document.getElementById("status").textContent = "제출 중...";
+
+      try {
+        const { error } = await db.rpc("submit_rating", {
+          p_rating: selected
+        });
+
+        if (error) throw error;
+
+        localStorage.setItem("ratedDay", dayKey());
+        document.getElementById("status").textContent =
+          "익명 별점이 제출되었습니다!";
+        await refresh();
+      } catch (error) {
+        document.getElementById("status").textContent =
+          "제출 실패. 잠시 후 다시 시도해 주세요.";
+      } finally {
+        busy = false;
+        document.getElementById("submit").disabled = false;
+      }
+    }
+  );
+
+  async function init() {
+    if (SUPABASE_URL.startsWith("YOUR_") ||
+        SUPABASE_ANON_KEY.startsWith("YOUR_")) {
+      document.getElementById("status").textContent =
+        "Supabase 설정을 완료해 주세요.";
+      return;
+    }
+
+    if (alreadyRated()) {
+      document.getElementById("status").textContent =
+        "오늘은 이미 평가했습니다.";
+    } else {
+      document.getElementById("status").textContent =
+        "별점을 선택해 주세요.";
+    }
+
+    await refresh();
+
+    // 다른 학생의 평가도 주기적으로 반영
+    setInterval(refresh, 10000);
+  }
+
+  init();
+</script>
+</body>
+</html>
